@@ -81,25 +81,37 @@ class ZookeeperBase
     state
   end
 
-  def initialize(host, timeout = 10, watcher=nil, opts = {})
+  def initialize(hosts, timeout = 10, watcher=nil, opts = {})
     # approximate the java behavior of raising java.lang.IllegalArgumentException if the host
     # argument ends with '/'
-    raise ArgumentError, "Host argument #{host.inspect} may not end with /" if host.end_with?('/')
+    raise ArgumentError, "Host argument #{hosts.inspect} may not end with /" if hosts.end_with?('/')
 
-    @host = host.dup
+    host_list = opts[:try_every_host] ? hosts.split(",") : [hosts]
+    host_list.each_with_index do |host, idx|
+      begin
+        @host = host.dup
 
-    watcher ||= get_default_global_watcher
-
-    @req_registry = RequestRegistry.new(watcher, :chroot_path => chroot_path)
-
-    @dispatcher = @czk = nil
-
-    update_pid!
-    reopen_after_fork!
+        watcher ||= get_default_global_watcher
     
-    yield self if block_given?
-
-    reopen(timeout, nil, opts)
+        @req_registry = RequestRegistry.new(watcher, :chroot_path => chroot_path)
+    
+        @dispatcher = @czk = nil
+    
+        update_pid!
+        reopen_after_fork!
+        
+        yield self if block_given?
+    
+        reopen(timeout, nil, opts)
+        break
+      rescue RuntimeError => e
+        logger.error { "Error connecting to Zookeeper host #{host}: #{e}" }
+        if idx == host_list.size - 1
+          raise e
+        end
+        logger.info { "Trying next Zookeeper host in the list" }
+      end
+    end
   end
 
   # if either of these happen, the user will need to renegotiate a connection via reopen
